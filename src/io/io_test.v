@@ -1,5 +1,7 @@
 module io
 
+import src.kmer as kmod
+
 fn test_parse_fasta_basic() {
 	records := read_fasta('src/io/testdata/test.fasta')!
 
@@ -27,4 +29,12 @@ fn test_parse_fasta_callback() {
 fn test_count_sequences() {
 	count := count_sequences('src/io/testdata/test.fasta')!
 	assert count == 4
+}
+
+fn test_read_kmer_file() {
+	counts := read_kmer_file('src/io/testdata/test.kmr', 6)!
+	assert counts.len > 0
+	kmer_int := kmod.encode('ACGTAA'.bytes(), 6)
+	canon := kmod.canonical(kmer_int, 6)
+	assert counts[canon] > 0
 }
