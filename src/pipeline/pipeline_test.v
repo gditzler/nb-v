@@ -101,3 +101,33 @@ fn test_train_multithreaded() {
 
 	os.rmdir_all(out_dir) or {}
 }
+
+fn test_classify_multithreaded() {
+	train_dir := '/tmp/nbv_test_e2e_mt_train'
+	os.rmdir_all(train_dir) or {}
+
+	train(config.Config{
+		mode: .train, kmer_size: 4, save_dir: train_dir,
+		source_dir: 'src/pipeline/testdata/training',
+		threads: 1, input_type: .fasta, extension: '.fasta',
+	})!
+
+	os.mkdir_all('/tmp/nbv_test_e2e_mt_reads') or {}
+	os.write_file('/tmp/nbv_test_e2e_mt_reads/test.fasta', '>r1\nACGTACGTACGTACGT\n>r2\nGGGGCCCCAAAATTTT\n')!
+
+	classify(config.Config{
+		mode: .classify, kmer_size: 4, save_dir: train_dir,
+		source_dir: '/tmp/nbv_test_e2e_mt_reads',
+		threads: 2, input_type: .fasta, extension: '.fasta',
+		format: .csv, prefix: '/tmp/nbv_test_e2e_mt_out',
+		full_result: false, temp_dir: '/tmp',
+	})!
+
+	output := os.read_file('/tmp/nbv_test_e2e_mt_out.csv')!
+	assert output.contains('r1')
+	assert output.contains('r2')
+
+	os.rmdir_all(train_dir) or {}
+	os.rmdir_all('/tmp/nbv_test_e2e_mt_reads') or {}
+	os.rm('/tmp/nbv_test_e2e_mt_out.csv') or {}
+}
