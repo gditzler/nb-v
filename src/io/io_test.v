@@ -4,6 +4,7 @@ import os
 import math
 import src.kmer as kmod
 import src.model
+import src.config
 
 fn test_parse_fasta_basic() {
 	records := read_fasta('src/io/testdata/test.fasta')!
@@ -79,4 +80,45 @@ fn test_load_legacy_class() {
 	assert cls.freqcnt_lg.len > 0
 	// ngenomes_lg should be log(2) = 0.693... (verified from hex dump)
 	assert math.abs(cls.ngenomes_lg - 0.6931471805599453) < 1e-10
+}
+
+fn test_writer_csv() {
+	mut w := Writer.new('/tmp/test_output.csv', .csv, false)!
+	w.write_result('seq1', 'class_a', -123.45)!
+	w.write_result('seq2', 'class_b', -678.90)!
+	w.close()!
+
+	content := os.read_file('/tmp/test_output.csv')!
+	lines := content.trim_space().split('\n')
+	assert lines.len == 2
+	assert lines[0].contains('seq1')
+	assert lines[0].contains('class_a')
+	os.rm('/tmp/test_output.csv') or {}
+}
+
+fn test_writer_json() {
+	mut w := Writer.new('/tmp/test_output.jsonl', .json, false)!
+	w.write_result('seq1', 'class_a', -123.45)!
+	w.close()!
+
+	content := os.read_file('/tmp/test_output.jsonl')!
+	assert content.contains('"seq_id"')
+	assert content.contains('"best_class"')
+	os.rm('/tmp/test_output.jsonl') or {}
+}
+
+fn test_writer_no_valid_kmers() {
+	mut w := Writer.new('/tmp/test_nokmers.csv', .csv, false)!
+	w.write_no_valid_kmers('bad_read')!
+	w.close()!
+
+	content := os.read_file('/tmp/test_nokmers.csv')!
+	assert content.contains('sequence contains no valid kmers')
+	os.rm('/tmp/test_nokmers.csv') or {}
+}
+
+fn test_output_filename() {
+	assert output_filename('results', .csv) == 'results.csv'
+	assert output_filename('results', .tsv) == 'results.tsv'
+	assert output_filename('results', .json) == 'results.jsonl'
 }
