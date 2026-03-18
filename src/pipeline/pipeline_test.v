@@ -293,8 +293,8 @@ fn test_classify_with_legacy_savefiles() {
 		full_result: false
 		temp_dir:    '/tmp'
 		limit_mb:    0
-		max_rows:    450000
-		max_cols:    20000
+		max_rows:    0
+		max_cols:    0
 	}
 
 	classify(c)!
@@ -305,19 +305,28 @@ fn test_classify_with_legacy_savefiles() {
 	output_lines := output.trim_space().split('\n')
 	expected_lines := expected.trim_space().split('\n')
 
-	// Check that class assignments match for as many reads as possible
+	// Build a map of seq_id -> best_class from expected results
+	mut expected_map := map[string]string{}
+	for line in expected_lines {
+		parts := line.split(',')
+		if parts.len >= 2 {
+			expected_map[parts[0]] = parts[1]
+		}
+	}
+
+	// Compare our output against expected by seq_id (order-independent)
 	mut matches := 0
 	mut total := 0
-	for i, exp_line in expected_lines {
-		if i >= output_lines.len {
-			break
-		}
-		exp_parts := exp_line.split(',')
-		out_parts := output_lines[i].split(',')
-		if exp_parts.len >= 2 && out_parts.len >= 2 {
-			total++
-			if exp_parts[0] == out_parts[0] && exp_parts[1] == out_parts[1] {
-				matches++
+	for line in output_lines {
+		parts := line.split(',')
+		if parts.len >= 2 {
+			seq_id := parts[0]
+			our_class := parts[1]
+			if seq_id in expected_map {
+				total++
+				if expected_map[seq_id] == our_class {
+					matches++
+				}
 			}
 		}
 	}
@@ -325,7 +334,7 @@ fn test_classify_with_legacy_savefiles() {
 	// At least 95% of class assignments should match
 	assert total > 0
 	match_pct := f64(matches) / f64(total)
-	assert match_pct > 0.95
+	assert match_pct > f64(0.95)
 
 	os.rm('/tmp/nbv_legacy_test_output.csv') or {}
 }
