@@ -177,4 +177,4 @@ src/
 
 ## License
 
-See [NBC++](https://github.com/EESI/Naive_Bayes) for the original project's license terms.
+MIT License. See [LICENSE](LICENSE).
