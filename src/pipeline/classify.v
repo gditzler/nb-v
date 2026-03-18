@@ -20,10 +20,13 @@ struct ClassifyResult {
 }
 
 pub fn classify(c config.Config) ! {
-	// Verify kmer size matches training
-	trained_k := nbio.load_meta(c.save_dir)!
-	if trained_k != c.kmer_size {
-		return error('kmer_size mismatch: config has ${c.kmer_size}, training used ${trained_k}')
+	// Verify kmer size matches training (only when meta.nbv exists, i.e. native savefiles)
+	meta_path := '${c.save_dir}/meta.nbv'
+	if os.exists(meta_path) {
+		trained_k := nbio.load_meta(c.save_dir)!
+		if trained_k != c.kmer_size {
+			return error('kmer_size mismatch: config has ${c.kmer_size}, training used ${trained_k}')
+		}
 	}
 
 	classes := load_classes(c.save_dir, c.kmer_size)!

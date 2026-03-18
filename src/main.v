@@ -2,6 +2,7 @@ module main
 
 import os
 import src.config
+import src.pipeline
 
 fn main() {
 	args := os.args[1..]
@@ -11,11 +12,24 @@ fn main() {
 	}
 
 	cfg := config.load(args[0]) or {
-		eprintln('Error loading config: ${err}')
+		eprintln('Error: ${err}')
 		exit(1)
 	}
 
-	println('Mode: ${cfg.mode}')
-	println('K-mer size: ${cfg.kmer_size}')
-	println('Source dir: ${cfg.source_dir}')
+	match cfg.mode {
+		.train {
+			pipeline.train(cfg) or {
+				eprintln('Training failed: ${err}')
+				exit(1)
+			}
+			println('Training complete. Savefiles written to ${cfg.save_dir}')
+		}
+		.classify {
+			pipeline.classify(cfg) or {
+				eprintln('Classification failed: ${err}')
+				exit(1)
+			}
+			println('Classification complete.')
+		}
+	}
 }
