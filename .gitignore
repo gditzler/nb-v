@@ -1,2 +1,4 @@
 nbv
 example_results.csv
+*.csv
+example/trained_output/
