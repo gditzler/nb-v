@@ -86,11 +86,16 @@ fn accumulate_results(mut classes map[string]model.NbClass, results []TrainResul
 
 fn train_single(c config.Config, jobs []TrainJob) !map[string]model.NbClass {
 	mut classes := map[string]model.NbClass{}
+	mut processed := 0
 
 	for job in jobs {
 		if job.class_id !in classes {
 			savefile := '${c.save_dir}/${job.class_id}.nbv'
-			classes[job.class_id] = model.NbClass.new(job.class_id, c.kmer_size, savefile)
+			if c.batch_size > 0 && os.exists(savefile) {
+				classes[job.class_id] = nbio.load_class(savefile)!
+			} else {
+				classes[job.class_id] = model.NbClass.new(job.class_id, c.kmer_size, savefile)
+			}
 		}
 
 		kmer_counts := load_kmer_counts(job.path, c.input_type, c.kmer_size) or {
@@ -101,12 +106,24 @@ fn train_single(c config.Config, jobs []TrainJob) !map[string]model.NbClass {
 		mut cls := classes[job.class_id]
 		cls.add_genome(kmer_counts)
 		classes[job.class_id] = cls
+		processed++
+
+		if c.batch_size > 0 && processed % c.batch_size == 0 {
+			os.mkdir_all(c.save_dir)!
+			for _, cl in classes {
+				nbio.save_class(cl, cl.savefile)!
+			}
+		}
 	}
 
 	return classes
 }
 
 fn train_multi(c config.Config, jobs []TrainJob) !map[string]model.NbClass {
+	if c.batch_size > 0 {
+		return train_multi_batched(c, jobs)
+	}
+
 	n_workers := if c.threads > jobs.len { jobs.len } else { c.threads }
 
 	job_ch := chan TrainJob{cap: jobs.len}
@@ -140,6 +157,69 @@ fn train_multi(c config.Config, jobs []TrainJob) !map[string]model.NbClass {
 	// Accumulate into classes in the main thread
 	mut classes := map[string]model.NbClass{}
 	accumulate_results(mut classes, results, c)
+
+	return classes
+}
+
+fn train_multi_batched(c config.Config, jobs []TrainJob) !map[string]model.NbClass {
+	mut classes := map[string]model.NbClass{}
+	mut batch_start := 0
+
+	for batch_start < jobs.len {
+		batch_end := if batch_start + c.batch_size > jobs.len {
+			jobs.len
+		} else {
+			batch_start + c.batch_size
+		}
+		chunk := jobs[batch_start..batch_end]
+
+		n_workers := if c.threads > chunk.len { chunk.len } else { c.threads }
+
+		job_ch := chan TrainJob{cap: chunk.len}
+		result_ch := chan TrainResult{cap: chunk.len}
+
+		mut wg := sync.new_waitgroup()
+		wg.add(n_workers)
+
+		for _ in 0 .. n_workers {
+			spawn train_worker(job_ch, result_ch, c.input_type, c.kmer_size, mut wg)
+		}
+
+		for job in chunk {
+			job_ch <- job
+		}
+		job_ch.close()
+
+		wg.wait()
+		result_ch.close()
+
+		mut results := []TrainResult{}
+		for {
+			result := <-result_ch or { break }
+			results << result
+		}
+
+		// Load existing classes from disk if not yet in memory
+		for result in results {
+			if result.class_id !in classes {
+				savefile := '${c.save_dir}/${result.class_id}.nbv'
+				if os.exists(savefile) {
+					classes[result.class_id] = nbio.load_class(savefile)!
+				} else {
+					classes[result.class_id] = model.NbClass.new(result.class_id, c.kmer_size, savefile)
+				}
+			}
+		}
+		accumulate_results(mut classes, results, c)
+
+		// Flush batch to disk
+		os.mkdir_all(c.save_dir)!
+		for _, cl in classes {
+			nbio.save_class(cl, cl.savefile)!
+		}
+
+		batch_start = batch_end
+	}
 
 	return classes
 }

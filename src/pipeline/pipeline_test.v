@@ -132,6 +132,153 @@ fn test_classify_multithreaded() {
 	os.rm('/tmp/nbv_test_e2e_mt_out.csv') or {}
 }
 
+fn test_train_with_batch_size() {
+	out_dir := '/tmp/nbv_test_train_batch'
+	os.rmdir_all(out_dir) or {}
+
+	c := config.Config{
+		mode:       .train
+		kmer_size:  4
+		save_dir:   out_dir
+		source_dir: 'src/pipeline/testdata/training'
+		threads:    1
+		input_type: .fasta
+		extension:  '.fasta'
+		limit_mb:   0
+		batch_size: 1
+	}
+
+	train(c)!
+
+	assert os.exists('${out_dir}/class_a.nbv')
+	assert os.exists('${out_dir}/class_b.nbv')
+	assert os.exists('${out_dir}/meta.nbv')
+
+	os.rmdir_all(out_dir) or {}
+}
+
+fn test_train_with_batch_size_multithreaded() {
+	out_dir := '/tmp/nbv_test_train_batch_mt'
+	os.rmdir_all(out_dir) or {}
+
+	c := config.Config{
+		mode:       .train
+		kmer_size:  4
+		save_dir:   out_dir
+		source_dir: 'src/pipeline/testdata/training'
+		threads:    2
+		input_type: .fasta
+		extension:  '.fasta'
+		limit_mb:   0
+		batch_size: 1
+	}
+
+	train(c)!
+
+	assert os.exists('${out_dir}/class_a.nbv')
+	assert os.exists('${out_dir}/class_b.nbv')
+	assert os.exists('${out_dir}/meta.nbv')
+
+	os.rmdir_all(out_dir) or {}
+}
+
+fn test_classify_with_max_rows() {
+	train_dir := '/tmp/nbv_test_maxrows_train'
+	os.rmdir_all(train_dir) or {}
+
+	train(config.Config{
+		mode: .train, kmer_size: 4, save_dir: train_dir,
+		source_dir: 'src/pipeline/testdata/training',
+		threads: 1, input_type: .fasta, extension: '.fasta',
+	})!
+
+	os.mkdir_all('/tmp/nbv_test_maxrows_reads') or {}
+	os.write_file('/tmp/nbv_test_maxrows_reads/test.fasta', '>r1\nACGTACGTACGTACGT\n>r2\nGGGGCCCCAAAATTTT\n>r3\nAAAACCCCGGGGTTTT\n')!
+
+	classify(config.Config{
+		mode: .classify, kmer_size: 4, save_dir: train_dir,
+		source_dir: '/tmp/nbv_test_maxrows_reads',
+		threads: 1, input_type: .fasta, extension: '.fasta',
+		format: .csv, prefix: '/tmp/nbv_test_maxrows_out',
+		full_result: false, temp_dir: '/tmp',
+		limit_mb: 0, max_rows: 2, max_cols: 0,
+	})!
+
+	output := os.read_file('/tmp/nbv_test_maxrows_out.csv')!
+	lines := output.trim_space().split('\n')
+	// max_rows=2 means only 2 reads should be in output
+	assert lines.len == 2
+
+	os.rmdir_all(train_dir) or {}
+	os.rmdir_all('/tmp/nbv_test_maxrows_reads') or {}
+	os.rm('/tmp/nbv_test_maxrows_out.csv') or {}
+}
+
+fn test_classify_with_max_cols() {
+	train_dir := '/tmp/nbv_test_maxcols_train'
+	os.rmdir_all(train_dir) or {}
+
+	train(config.Config{
+		mode: .train, kmer_size: 4, save_dir: train_dir,
+		source_dir: 'src/pipeline/testdata/training',
+		threads: 1, input_type: .fasta, extension: '.fasta',
+	})!
+
+	os.mkdir_all('/tmp/nbv_test_maxcols_reads') or {}
+	os.write_file('/tmp/nbv_test_maxcols_reads/test.fasta', '>r1\nACGTACGTACGTACGT\n')!
+
+	classify(config.Config{
+		mode: .classify, kmer_size: 4, save_dir: train_dir,
+		source_dir: '/tmp/nbv_test_maxcols_reads',
+		threads: 1, input_type: .fasta, extension: '.fasta',
+		format: .csv, prefix: '/tmp/nbv_test_maxcols_out',
+		full_result: false, temp_dir: '/tmp',
+		limit_mb: 0, max_rows: 0, max_cols: 1,
+	})!
+
+	output := os.read_file('/tmp/nbv_test_maxcols_out.csv')!
+	assert output.contains('r1')
+	// With max_cols=1, only one class loaded, so that class must be the result
+	lines := output.trim_space().split('\n')
+	assert lines.len == 1
+
+	os.rmdir_all(train_dir) or {}
+	os.rmdir_all('/tmp/nbv_test_maxcols_reads') or {}
+	os.rm('/tmp/nbv_test_maxcols_out.csv') or {}
+}
+
+fn test_classify_with_limit_mb() {
+	train_dir := '/tmp/nbv_test_limitmb_train'
+	os.rmdir_all(train_dir) or {}
+
+	train(config.Config{
+		mode: .train, kmer_size: 4, save_dir: train_dir,
+		source_dir: 'src/pipeline/testdata/training',
+		threads: 1, input_type: .fasta, extension: '.fasta',
+	})!
+
+	os.mkdir_all('/tmp/nbv_test_limitmb_reads') or {}
+	os.write_file('/tmp/nbv_test_limitmb_reads/test.fasta', '>r1\nACGTACGTACGTACGT\n')!
+
+	// Use a very small limit_mb (1 MB) to force multi-round classification
+	// even though test data is tiny. This exercises the code path.
+	classify(config.Config{
+		mode: .classify, kmer_size: 4, save_dir: train_dir,
+		source_dir: '/tmp/nbv_test_limitmb_reads',
+		threads: 1, input_type: .fasta, extension: '.fasta',
+		format: .csv, prefix: '/tmp/nbv_test_limitmb_out',
+		full_result: false, temp_dir: '/tmp',
+		limit_mb: 1, max_rows: 0, max_cols: 0,
+	})!
+
+	output := os.read_file('/tmp/nbv_test_limitmb_out.csv')!
+	assert output.contains('r1')
+
+	os.rmdir_all(train_dir) or {}
+	os.rmdir_all('/tmp/nbv_test_limitmb_reads') or {}
+	os.rm('/tmp/nbv_test_limitmb_out.csv') or {}
+}
+
 fn test_classify_with_legacy_savefiles() {
 	c := config.Config{
 		mode:        .classify
