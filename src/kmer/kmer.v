@@ -63,10 +63,10 @@ pub fn count_from_buffer(buf []u8, k int) map[int]int {
 }
 
 pub fn num_canonical_kmers(k int) i64 {
-	total := i64(1) << (2 * k)
+	total := i64(u64(1) << (2 * k))
 	if k % 2 == 1 {
 		return total / 2
 	}
-	palindromes := i64(1) << k
+	palindromes := i64(u64(1) << k)
 	return (total + palindromes) / 2
 }

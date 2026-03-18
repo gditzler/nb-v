@@ -149,7 +149,7 @@ fn i32_to_bytes(val int) []u8 {
 }
 
 fn bytes_to_i32(b []u8) int {
-	return int(b[0]) | (int(b[1]) << 8) | (int(b[2]) << 16) | (int(b[3]) << 24)
+	return int(u32(b[0]) | (u32(b[1]) << 8) | (u32(b[2]) << 16) | (u32(b[3]) << 24))
 }
 
 fn i64_to_bytes(val i64) []u8 {
@@ -161,11 +161,11 @@ fn i64_to_bytes(val i64) []u8 {
 }
 
 fn bytes_to_i64(b []u8) i64 {
-	mut result := i64(0)
+	mut result := u64(0)
 	for i in 0 .. 8 {
-		result |= i64(b[i]) << (i * 8)
+		result |= u64(b[i]) << (i * 8)
 	}
-	return result
+	return i64(result)
 }
 
 fn bytes_to_f64(b []u8) f64 {
