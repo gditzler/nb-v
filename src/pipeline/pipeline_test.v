@@ -77,3 +77,27 @@ fn test_train_then_classify() {
 	os.rmdir_all('/tmp/nbv_test_e2e_reads') or {}
 	os.rm('/tmp/nbv_test_e2e_output.csv') or {}
 }
+
+fn test_train_multithreaded() {
+	out_dir := '/tmp/nbv_test_train_mt'
+	os.rmdir_all(out_dir) or {}
+
+	c := config.Config{
+		mode:       .train
+		kmer_size:  4
+		save_dir:   out_dir
+		source_dir: 'src/pipeline/testdata/training'
+		threads:    2
+		input_type: .fasta
+		extension:  '.fasta'
+		limit_mb:   0
+		batch_size: 0
+	}
+
+	train(c)!
+
+	assert os.exists('${out_dir}/class_a.nbv')
+	assert os.exists('${out_dir}/class_b.nbv')
+
+	os.rmdir_all(out_dir) or {}
+}
