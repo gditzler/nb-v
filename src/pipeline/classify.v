@@ -11,6 +11,7 @@ import src.kmer as kmod
 struct SeqJob {
 	seq_id      string
 	kmer_counts map[int]int
+	index       int
 }
 
 struct ClassifyResult {
@@ -18,6 +19,7 @@ struct ClassifyResult {
 	best_class string
 	best_score f64
 	all_scores map[string]f64
+	index      int
 }
 
 struct BestResult {
@@ -92,7 +94,7 @@ fn classify_single(c config.Config, classes []model.NbClass, class_ids []string,
 					continue
 				}
 
-				result := classify_read(seq_id, kmer_counts, classes, c.full_result)
+				result := classify_read(seq_id, kmer_counts, classes, c.full_result, rows_written)
 				write_classify_result(mut writer, result, class_ids, c.full_result)!
 				rows_written++
 			}
@@ -107,7 +109,7 @@ fn classify_single(c config.Config, classes []model.NbClass, class_ids []string,
 				rows_written++
 				continue
 			}
-			result := classify_read(seq_id, kmer_counts, classes, c.full_result)
+			result := classify_read(seq_id, kmer_counts, classes, c.full_result, rows_written)
 			write_classify_result(mut writer, result, class_ids, c.full_result)!
 			rows_written++
 		}
@@ -125,56 +127,64 @@ fn classify_worker(seq_ch chan SeqJob, result_ch chan ClassifyResult, classes []
 	}
 	for {
 		job := <-seq_ch or { break }
-		result := classify_read(job.seq_id, job.kmer_counts, classes, full_result)
+		result := classify_read(job.seq_id, job.kmer_counts, classes, full_result, job.index)
 		result_ch <- result
 	}
 }
 
 fn classify_multi(c config.Config, classes []model.NbClass, class_ids []string, input_files []string) ! {
-	// First, build all sequence jobs so we know total count for channel capacity
+	// Build all sequence jobs, tracking input order via index
 	mut jobs := []SeqJob{}
-	mut no_kmer_ids := []string{}
+	mut no_kmer_entries := map[int]string{}
+	mut seq_index := 0
 
 	for input_file in input_files {
 		if c.input_type == .fasta {
 			records := nbio.read_fasta(input_file)!
 			for record in records {
-				if c.max_rows > 0 && (jobs.len + no_kmer_ids.len) >= c.max_rows {
+				if c.max_rows > 0 && seq_index >= c.max_rows {
 					break
 				}
 				seq_id := record.header.split(' ')[0]
 				kmer_counts := kmod.count_from_buffer(record.sequence, c.kmer_size)
 
 				if kmer_counts.len == 0 {
-					no_kmer_ids << seq_id
+					no_kmer_entries[seq_index] = seq_id
+					seq_index++
 					continue
 				}
 
 				jobs << SeqJob{
 					seq_id:      seq_id
 					kmer_counts: kmer_counts
+					index:       seq_index
 				}
+				seq_index++
 			}
 		} else {
-			if c.max_rows > 0 && (jobs.len + no_kmer_ids.len) >= c.max_rows {
+			if c.max_rows > 0 && seq_index >= c.max_rows {
 				break
 			}
 			kmer_counts := nbio.read_kmer_file(input_file, c.kmer_size)!
 			seq_id := os.file_name(input_file).replace(c.extension, '')
 			if kmer_counts.len == 0 {
-				no_kmer_ids << seq_id
+				no_kmer_entries[seq_index] = seq_id
+				seq_index++
 				continue
 			}
 			jobs << SeqJob{
 				seq_id:      seq_id
 				kmer_counts: kmer_counts
+				index:       seq_index
 			}
+			seq_index++
 		}
-		if c.max_rows > 0 && (jobs.len + no_kmer_ids.len) >= c.max_rows {
+		if c.max_rows > 0 && seq_index >= c.max_rows {
 			break
 		}
 	}
 
+	total_seqs := seq_index
 	n_workers := if c.threads > jobs.len { jobs.len } else { c.threads }
 
 	// Handle edge case: no valid jobs
@@ -184,8 +194,10 @@ fn classify_multi(c config.Config, classes []model.NbClass, class_ids []string, 
 		if c.full_result {
 			writer.write_header(class_ids)!
 		}
-		for sid in no_kmer_ids {
-			writer.write_no_valid_kmers(sid)!
+		for i in 0 .. total_seqs {
+			if i in no_kmer_entries {
+				writer.write_no_valid_kmers(no_kmer_entries[i])!
+			}
 		}
 		writer.close()!
 		return
@@ -212,14 +224,14 @@ fn classify_multi(c config.Config, classes []model.NbClass, class_ids []string, 
 	wg.wait()
 	result_ch.close()
 
-	// Drain results
-	mut results := []ClassifyResult{}
+	// Drain results into a map keyed by input index
+	mut result_map := map[int]ClassifyResult{}
 	for {
 		result := <-result_ch or { break }
-		results << result
+		result_map[result.index] = result
 	}
 
-	// Write output
+	// Write output in original input order
 	output_path := nbio.output_filename(c.prefix, c.format)
 	mut writer := nbio.Writer.new(output_path, c.format, c.full_result)!
 
@@ -227,14 +239,12 @@ fn classify_multi(c config.Config, classes []model.NbClass, class_ids []string, 
 		writer.write_header(class_ids)!
 	}
 
-	// Write sequences with no valid kmers first
-	for sid in no_kmer_ids {
-		writer.write_no_valid_kmers(sid)!
-	}
-
-	// Write classification results
-	for result in results {
-		write_classify_result(mut writer, result, class_ids, c.full_result)!
+	for i in 0 .. total_seqs {
+		if i in no_kmer_entries {
+			writer.write_no_valid_kmers(no_kmer_entries[i])!
+		} else if i in result_map {
+			write_classify_result(mut writer, result_map[i], class_ids, c.full_result)!
+		}
 	}
 
 	writer.close()!
@@ -336,7 +346,7 @@ fn classify_multiround(c config.Config, all_class_paths []ClassPath, input_files
 	writer.close()!
 }
 
-fn classify_read(seq_id string, kmer_counts map[int]int, classes []model.NbClass, full_result bool) ClassifyResult {
+fn classify_read(seq_id string, kmer_counts map[int]int, classes []model.NbClass, full_result bool, index int) ClassifyResult {
 	mut best_class := ''
 	mut best_score := -math.max_f64
 	mut all_scores := map[string]f64{}
@@ -357,6 +367,7 @@ fn classify_read(seq_id string, kmer_counts map[int]int, classes []model.NbClass
 		best_class: best_class
 		best_score: best_score
 		all_scores: all_scores
+		index:      index
 	}
 }
 
