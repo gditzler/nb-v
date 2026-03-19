@@ -1,7 +1,6 @@
 # Expected Output
 
 ```
-```
 % bash benchmarks/benchmark.sh
 
 ============================================
@@ -92,6 +91,5 @@ Built: Docker image nbcpp-bench
 
 Note: NBC++ runs inside Docker (Linux container).
 Container overhead may add a small constant to each run.
-``````
 ```
 
