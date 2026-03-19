@@ -70,6 +70,8 @@ output:
 
 ### Training
 
+> **Note:** The training pipeline has not been tested yet. Classification against pre-trained NBC++ savefiles is verified.
+
 Organize training data as class subdirectories, each containing genome files:
 
 ```
