@@ -8,12 +8,16 @@ import src.model
 import src.io as nbio
 import src.kmer as kmod
 
+// SeqJob carries one read (sequence ID, k-mer counts, and original input order index)
+// queued for classification.
 struct SeqJob {
 	seq_id      string
 	kmer_counts map[int]int
 	index       int
 }
 
+// ClassifyResult holds the classification outcome for one read, including its
+// original input index so results can be sorted back into input order.
 struct ClassifyResult {
 	seq_id     string
 	best_class string
@@ -22,6 +26,8 @@ struct ClassifyResult {
 	index      int
 }
 
+// BestResult records the highest-scoring class and its log-likelihood for one read.
+// Used by classify_multiround to track the global best across multiple class chunks.
 struct BestResult {
 	best_class string
 	best_score f64
@@ -33,6 +39,11 @@ struct ClassPath {
 	legacy  bool
 }
 
+// classify runs the full classification pipeline described by c: discovers class
+// savefiles in c.save_dir, reads input sequences from c.source_dir, scores each
+// read against all classes, and writes results to a file named by c.prefix and c.format.
+// When c.limit_mb > 0 it uses multi-round classification to stay within the memory
+// budget; otherwise all classes are loaded once and all reads are scored in a single pass.
 pub fn classify(c config.Config) ! {
 	// Verify kmer size matches training (only when meta.nbv exists, i.e. native savefiles)
 	meta_path := '${c.save_dir}/meta.nbv'
@@ -68,6 +79,8 @@ pub fn classify(c config.Config) ! {
 	}
 }
 
+// classify_single scores reads sequentially on the calling goroutine, writing
+// results immediately as each read is processed.
 fn classify_single(c config.Config, classes []model.NbClass, class_ids []string, input_files []string) ! {
 	output_path := nbio.output_filename(c.prefix, c.format)
 	mut writer := nbio.Writer.new(output_path, c.format, c.full_result)!
@@ -121,6 +134,8 @@ fn classify_single(c config.Config, classes []model.NbClass, class_ids []string,
 	writer.close()!
 }
 
+// classify_worker drains seq_ch, scores each read against all classes, and sends
+// ClassifyResult values to result_ch. Signals completion to wg when seq_ch is closed.
 fn classify_worker(seq_ch chan SeqJob, result_ch chan ClassifyResult, classes []model.NbClass, full_result bool, mut wg sync.WaitGroup) {
 	defer {
 		wg.done()
@@ -132,6 +147,8 @@ fn classify_worker(seq_ch chan SeqJob, result_ch chan ClassifyResult, classes []
 	}
 }
 
+// classify_multi distributes reads across c.threads worker goroutines, collects
+// results into a map keyed by input index, then writes output in original input order.
 fn classify_multi(c config.Config, classes []model.NbClass, class_ids []string, input_files []string) ! {
 	// Build all sequence jobs, tracking input order via index
 	mut jobs := []SeqJob{}
@@ -250,8 +267,12 @@ fn classify_multi(c config.Config, classes []model.NbClass, class_ids []string, 
 	writer.close()!
 }
 
-// Multi-round classification: load classes in chunks that fit within the memory limit,
-// score all reads against each chunk, track the best result per read across rounds.
+// classify_multiround implements a memory-bounded classification strategy. All reads
+// are loaded into memory up front (reads are small relative to class models), then the
+// full set of class savefiles is split into chunks that each fit within limit_bytes.
+// The reads are scored against each chunk in turn, keeping a running best (class, score)
+// per read. This allows classifying against arbitrarily many classes with a fixed
+// memory footprint determined by limit_mb in the config.
 fn classify_multiround(c config.Config, all_class_paths []ClassPath, input_files []string, limit_bytes i64) ! {
 	// Build all read jobs up front (reads are small relative to class models)
 	mut jobs := []SeqJob{}
@@ -346,6 +367,8 @@ fn classify_multiround(c config.Config, all_class_paths []ClassPath, input_files
 	writer.close()!
 }
 
+// classify_read scores one read against all classes and returns the best class and
+// score. When full_result is true all per-class scores are also recorded.
 fn classify_read(seq_id string, kmer_counts map[int]int, classes []model.NbClass, full_result bool, index int) ClassifyResult {
 	mut best_class := ''
 	mut best_score := -math.max_f64
@@ -371,6 +394,8 @@ fn classify_read(seq_id string, kmer_counts map[int]int, classes []model.NbClass
 	}
 }
 
+// write_classify_result dispatches to write_full_result or write_result on the writer
+// depending on whether full per-class scores were requested.
 fn write_classify_result(mut writer nbio.Writer, result ClassifyResult, class_ids []string, full_result bool) ! {
 	if full_result {
 		writer.write_full_result(result.seq_id, result.all_scores, class_ids)!
@@ -379,7 +404,9 @@ fn write_classify_result(mut writer nbio.Writer, result ClassifyResult, class_id
 	}
 }
 
-// Discover all class savefile paths in the save directory, respecting max_cols limit.
+// discover_class_paths returns all class savefile paths found in save_dir, up to
+// max_cols entries (0 means unlimited). Recognises both native .nbv files and
+// legacy NBC++ -save.dat files; meta.nbv is excluded.
 fn discover_class_paths(save_dir string, max_cols int) ![]ClassPath {
 	mut paths := []ClassPath{}
 	entries := os.ls(save_dir)!
@@ -403,7 +430,8 @@ fn discover_class_paths(save_dir string, max_cols int) ![]ClassPath {
 	return paths
 }
 
-// Load all classes from the given ClassPath list.
+// load_all_classes loads every ClassPath entry into an NbClass slice, using the
+// native loader for .nbv files and the legacy NBC++ loader for -save.dat files.
 fn load_all_classes(paths []ClassPath, kmer_size int) ![]model.NbClass {
 	mut classes := []model.NbClass{}
 	for cp in paths {
@@ -418,8 +446,10 @@ fn load_all_classes(paths []ClassPath, kmer_size int) ![]model.NbClass {
 	return classes
 }
 
-// Split class paths into chunks that each fit within the memory limit.
-// Estimates memory by loading each class file's size on disk as a proxy.
+// split_classes_by_memory partitions paths into chunks whose estimated memory
+// footprint stays within limit_bytes. Each class file's on-disk size is multiplied
+// by 3 as a conservative estimate of its in-memory size (map overhead). A class that
+// alone would exceed the limit still forms its own single-element chunk.
 fn split_classes_by_memory(paths []ClassPath, kmer_size int, limit_bytes i64) ![][]ClassPath {
 	mut chunks := [][]ClassPath{}
 	mut current_chunk := []ClassPath{}
@@ -450,6 +480,8 @@ fn split_classes_by_memory(paths []ClassPath, kmer_size int, limit_bytes i64) ![
 	return chunks
 }
 
+// find_input_files returns all files in source_dir whose name ends with extension.
+// Returns an error if no matching files are found.
 fn find_input_files(source_dir string, extension string) ![]string {
 	mut files := []string{}
 	entries := os.ls(source_dir)!

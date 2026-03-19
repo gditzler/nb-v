@@ -1,3 +1,6 @@
+// main is the entry point for the nbv binary. It accepts a single YAML config file
+// path as its only argument, loads and validates the config, then delegates to either
+// pipeline.train or pipeline.classify depending on the configured mode.
 module main
 
 import os

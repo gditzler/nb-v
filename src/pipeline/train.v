@@ -1,3 +1,7 @@
+// pipeline provides the train and classify orchestrators that drive the full
+// NBV workflow. Both pipelines support single-threaded and multithreaded execution
+// paths selected by config.Config.threads. This file covers training; classify.v
+// covers classification. The two files share the pipeline module.
 module pipeline
 
 import os
@@ -7,16 +11,20 @@ import src.model
 import src.io as nbio
 import src.kmer as kmod
 
+// TrainJob carries one (class, file) pair queued for k-mer counting.
 struct TrainJob {
 	class_id string
 	path     string
 }
 
+// TrainResult carries the k-mer counts produced by one training file.
 struct TrainResult {
 	class_id    string
 	kmer_counts map[int]int
 }
 
+// scan_training_dir enumerates source_dir for per-class subdirectories and
+// returns one TrainJob per file matching extension found inside each subdirectory.
 fn scan_training_dir(source_dir string, extension string) ![]TrainJob {
 	mut jobs := []TrainJob{}
 	entries := os.ls(source_dir)!
@@ -39,6 +47,8 @@ fn scan_training_dir(source_dir string, extension string) ![]TrainJob {
 	return jobs
 }
 
+// load_kmer_counts reads k-mer counts from a single file, dispatching to the
+// FASTA reader or the .kmr reader depending on input_type.
 fn load_kmer_counts(path string, input_type config.InputType, k int) !map[int]int {
 	if input_type == .fasta {
 		records := nbio.read_fasta(path)!
@@ -55,6 +65,8 @@ fn load_kmer_counts(path string, input_type config.InputType, k int) !map[int]in
 	}
 }
 
+// train_worker drains job_ch, computes k-mer counts for each file, and sends
+// TrainResult values to result_ch. Signals completion to wg when job_ch is closed.
 fn train_worker(job_ch chan TrainJob, result_ch chan TrainResult, input_type config.InputType, k int, mut wg sync.WaitGroup) {
 	defer {
 		wg.done()
@@ -72,6 +84,8 @@ fn train_worker(job_ch chan TrainJob, result_ch chan TrainResult, input_type con
 	}
 }
 
+// accumulate_results folds a batch of TrainResult values into the classes map,
+// creating a new NbClass for any class_id seen for the first time.
 fn accumulate_results(mut classes map[string]model.NbClass, results []TrainResult, c config.Config) {
 	for result in results {
 		if result.class_id !in classes {
@@ -84,6 +98,9 @@ fn accumulate_results(mut classes map[string]model.NbClass, results []TrainResul
 	}
 }
 
+// train_single processes jobs sequentially on the calling goroutine.
+// When batch_size > 0 it checkpoints class models to disk after every batch_size
+// files, resuming from the saved state on the next run.
 fn train_single(c config.Config, jobs []TrainJob) !map[string]model.NbClass {
 	mut classes := map[string]model.NbClass{}
 	mut processed := 0
@@ -119,6 +136,8 @@ fn train_single(c config.Config, jobs []TrainJob) !map[string]model.NbClass {
 	return classes
 }
 
+// train_multi distributes jobs across c.threads worker goroutines and accumulates
+// results on the main thread. Delegates to train_multi_batched when batch_size > 0.
 fn train_multi(c config.Config, jobs []TrainJob) !map[string]model.NbClass {
 	if c.batch_size > 0 {
 		return train_multi_batched(c, jobs)
@@ -161,6 +180,9 @@ fn train_multi(c config.Config, jobs []TrainJob) !map[string]model.NbClass {
 	return classes
 }
 
+// train_multi_batched processes jobs in fixed-size chunks using c.threads workers,
+// flushing all class models to disk after each chunk so training can be resumed if
+// interrupted. Existing savefiles are loaded at the start of each chunk.
 fn train_multi_batched(c config.Config, jobs []TrainJob) !map[string]model.NbClass {
 	mut classes := map[string]model.NbClass{}
 	mut batch_start := 0
@@ -224,6 +246,9 @@ fn train_multi_batched(c config.Config, jobs []TrainJob) !map[string]model.NbCla
 	return classes
 }
 
+// train runs the full training pipeline described by c: scans the source directory
+// for per-class training files, builds one NbClass model per class, and writes
+// all class savefiles plus a meta.nbv index to c.save_dir.
 pub fn train(c config.Config) ! {
 	jobs := scan_training_dir(c.source_dir, c.extension)!
 	if jobs.len == 0 {

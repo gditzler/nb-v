@@ -7,9 +7,11 @@ import math
 const magic_bytes = [u8(`N`), `B`, `V`, `1`]
 const format_version = u8(1)
 
-// Save an NbClass in NBV binary format.
-// Header: magic(4) + version(1) + kmer_size(4) + ngenomes(4) + sumfreq(8) + id_len(4) + id(id_len)
-// Body: repeated (kmer_int i32, count i32) pairs
+// save_class writes an NbClass to path in the NBV binary format. Raw counts
+// are stored so that log-space parameters can be recomputed exactly on load.
+// Format: magic(4) + version(1) + kmer_size(4) + ngenomes(4) + sumfreq(8) +
+//         id_len(4) + id(id_len) + repeated (kmer_int i32, count i32) pairs.
+// All multi-byte integers are little-endian.
 pub fn save_class(cls model.NbClass, path string) ! {
 	mut f := os.create(path)!
 	defer {
@@ -30,6 +32,10 @@ pub fn save_class(cls model.NbClass, path string) ! {
 	}
 }
 
+// load_class reads an NBV binary file written by save_class and reconstructs
+// a fully populated NbClass, recomputing all log-space fields from the stored
+// raw counts. Returns an error if the magic bytes or format version do not
+// match, or if the file cannot be read.
 pub fn load_class(path string) !model.NbClass {
 	data := os.read_bytes(path)!
 	mut pos := 0
@@ -82,8 +88,13 @@ pub fn load_class(path string) !model.NbClass {
 	}
 }
 
-// Load NBC++ legacy -save.dat file. Log-space fields only.
-// Format: f64(ngenomes_lg) + f64(sumfreq_lg) + i32(n_entries) + n_entries*(i32 kmer, f64 freqcnt_lg)
+// load_legacy_class reads an NBC++ legacy -save.dat file and returns a
+// classify-only NbClass (state .classify_only) whose log-space fields are
+// populated directly from the file. The class id is derived from the filename
+// by stripping the '-save.dat' suffix. Raw counts are not available in this
+// format, so the model cannot be retrained after loading.
+// Format: f64(ngenomes_lg) + f64(sumfreq_lg) + i32(n_entries) +
+//         n_entries * (i32 kmer, f64 freqcnt_lg). All values are little-endian.
 pub fn load_legacy_class(path string, k int) !model.NbClass {
 	data := os.read_bytes(path)!
 	mut pos := 0
@@ -127,11 +138,16 @@ pub fn load_legacy_class(path string, k int) !model.NbClass {
 	}
 }
 
+// save_meta writes the k-mer size used during training to a meta.nbv file
+// inside save_dir, creating the directory if it does not exist. This allows
+// classify runs to determine k without requiring it in the config.
 pub fn save_meta(save_dir string, kmer_size int) ! {
 	os.mkdir_all(save_dir)!
 	os.write_file('${save_dir}/meta.nbv', '${kmer_size}')!
 }
 
+// load_meta reads the k-mer size from the meta.nbv file in save_dir written
+// by save_meta. Returns an error if the file cannot be read.
 pub fn load_meta(save_dir string) !int {
 	content := os.read_file('${save_dir}/meta.nbv')!
 	return content.trim_space().int()

@@ -1,17 +1,24 @@
+// config parses and validates YAML configuration files into a flat Config struct.
+// All validation is performed at load time; callers receive either a ready-to-use
+// Config or an error describing the first constraint violation found.
 module config
 
 import prantlf.yaml
 
+// Mode specifies whether the run will train new class models or classify reads.
 pub enum Mode {
 	train
 	classify
 }
 
+// InputType specifies the format of the input sequence data.
+// kmer_file expects pre-computed k-mer count files (.kmr); fasta expects raw FASTA files.
 pub enum InputType {
 	kmer_file
 	fasta
 }
 
+// OutputFormat specifies the format of the classification result file.
 pub enum OutputFormat {
 	csv
 	tsv
@@ -53,6 +60,9 @@ pub:
 	output     OutputConfig
 }
 
+// Config holds the fully parsed and validated configuration for a single NBV run.
+// All string-typed enum fields from the YAML source are resolved to their typed enum
+// equivalents; nested input/memory/output sections are flattened into a single struct.
 pub struct Config {
 pub:
 	version     int
@@ -73,6 +83,9 @@ pub:
 	temp_dir    string
 }
 
+// load parses the YAML file at path, validates all fields, and returns a Config.
+// Returns an error if the file cannot be read, any enum value is unrecognised,
+// kmer_size is outside [1, 15], source_dir is empty, or threads is less than 1.
 pub fn load(path string) !Config {
 	raw := yaml.unmarshal_file[RawConfig](path)!
 
