@@ -3,3 +3,5 @@ example_results.csv
 *.csv
 example/trained_output/
 .claude/
+benchmarks/Naive_Bayes/
+benchmarks/nbv_bench
