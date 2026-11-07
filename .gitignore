@@ -5,3 +5,10 @@ example/trained_output/
 .claude/
 benchmarks/Naive_Bayes/
 benchmarks/nbv_bench
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
